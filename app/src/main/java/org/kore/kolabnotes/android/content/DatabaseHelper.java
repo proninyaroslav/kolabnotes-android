@@ -1,9 +1,13 @@
 package org.kore.kolabnotes.android.content;
 
+import android.accounts.Account;
+import android.accounts.AccountManager;
 import android.content.Context;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.util.Log;
+
+import org.kore.kolabnotes.android.security.AuthenticatorActivity;
 
 /**
  * Created by koni on 12.03.15.
@@ -14,6 +18,7 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     public static final String COLUMN_ACCOUNT = "account";
 
     public static final String TABLE_ACTIVEACCOUNT = "activeaccount";
+    public static final String TABLE_ACCOUNTS = "accounts";
 
     public static final String TABLE_NOTES = "notes";
     public static final String COLUMN_ID = "_id";
@@ -45,11 +50,17 @@ public class DatabaseHelper extends SQLiteOpenHelper {
     public static final String COLUMN_IDNOTE = "id_note";
     public static final String COLUMN_IDTAG = "id_tag";
 
+    public static final String TABLE_ATTACHMENT = "attachment";
+    public static final String COLUMN_IDATTACHMENT = "id_attachment";
+    public static final String COLUMN_FILENAME = "filetype";
+    public static final String COLUMN_MIMETYPE = "mimetype";
+    public static final String COLUMN_FILESIZE = "filesize";
+
     public static final String TABLE_MODIFICATION = "modifications";
     public static final String COLUMN_MODIFICATIONTYPE = "modificationType";
 
     private static final String DATABASE_NAME = "kolabnotes.db";
-    private static final int DATABASE_VERSION = 5;
+    private static final int DATABASE_VERSION = 7;
 
     // Database creation sql statement
     private static final String CREATE_NOTES = "create table "
@@ -93,6 +104,18 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             + COLUMN_IDNOTE + " text not null, "
             + COLUMN_IDTAG + " text not null);";
 
+    private static final String CREATE_ATTACHMENT = "create table "
+            + TABLE_ATTACHMENT +
+            "(" + COLUMN_ID+ " integer primary key autoincrement, "
+            + COLUMN_ACCOUNT + " text not null, "
+            + COLUMN_ROOT_FOLDER + " text not null, "
+            + COLUMN_IDNOTE + " text not null, "
+            + COLUMN_IDATTACHMENT + " text not null, "
+            + COLUMN_CREATIONDATE + " integer, "
+            + COLUMN_FILESIZE + " integer not null, "
+            + COLUMN_FILENAME + " text not null, "
+            + COLUMN_MIMETYPE + " text not null);";
+
     private static final String CREATE_MODIFICATION = "create table "
             + TABLE_MODIFICATION +
             "(" + COLUMN_ID+ " integer primary key autoincrement, "
@@ -110,14 +133,29 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             + COLUMN_ACCOUNT + " text not null, "
             + COLUMN_ROOT_FOLDER + " text not null );";
 
+    private static final String CREATE_ACCOUNTS = "create table "
+            + TABLE_ACCOUNTS +
+            "(" + COLUMN_ID+ " integer primary key autoincrement, "
+            + COLUMN_ACCOUNT + " text not null, "
+            + COLUMN_ROOT_FOLDER + " text not null );";
+
     private static final String INIT_ACTIVEACCOUNT = "insert into "
             + TABLE_ACTIVEACCOUNT +
             "(" + COLUMN_ACCOUNT + ", "
             + COLUMN_ROOT_FOLDER + " )" +
             "VALUES ('local','Notes');";
 
+    private static final String INIT_ACCOUNTS = "insert into "
+            + TABLE_ACCOUNTS +
+            "(" + COLUMN_ACCOUNT + ", "
+            + COLUMN_ROOT_FOLDER + " )" +
+            "VALUES ('local','Notes');";
+
+    private final Context context;
+
     public DatabaseHelper(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
+        this.context = context;
     }
 
     @Override
@@ -126,8 +164,12 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         database.execSQL(CREATE_TAGS);
         database.execSQL(CREATE_MODIFICATION);
         database.execSQL(CREATE_TAGS_NOTES);
+        database.execSQL(CREATE_ATTACHMENT);
         database.execSQL(CREATE_ACTIVEACCOUNT);
         database.execSQL(INIT_ACTIVEACCOUNT);
+
+        database.execSQL(CREATE_ACCOUNTS);
+        database.execSQL(INIT_ACCOUNTS);
     }
 
     @Override
@@ -147,6 +189,11 @@ public class DatabaseHelper extends SQLiteOpenHelper {
             db.execSQL("ALTER TABLE "+TABLE_NOTES+" ADD COLUMN "+COLUMN_MODIFICATION_ALLOWED+" text ");
             db.execSQL("ALTER TABLE "+TABLE_NOTES+" ADD COLUMN "+COLUMN_CREATION_ALLOWED+" text ");
         }
+        if(oldVersion < 6){
+            db.execSQL(CREATE_ATTACHMENT);
+        }
+        if(oldVersion < 7){
+            db.execSQL(CREATE_ACCOUNTS);
+        }
     }
-
 }

@@ -46,12 +46,14 @@ import org.kore.kolab.notes.Note;
 import org.kore.kolab.notes.Notebook;
 import org.kore.kolab.notes.SharedNotebook;
 import org.kore.kolab.notes.Tag;
+import org.kore.kolabnotes.android.AttachmentActivity;
 import org.kore.kolabnotes.android.DrawEditorActivity;
 import org.kore.kolabnotes.android.R;
 import org.kore.kolabnotes.android.Utils;
 import org.kore.kolabnotes.android.content.AccountIdentifier;
 import org.kore.kolabnotes.android.content.ActiveAccount;
 import org.kore.kolabnotes.android.content.ActiveAccountRepository;
+import org.kore.kolabnotes.android.content.AttachmentRepository;
 import org.kore.kolabnotes.android.content.NoteRepository;
 import org.kore.kolabnotes.android.content.NoteTagRepository;
 import org.kore.kolabnotes.android.content.NotebookRepository;
@@ -78,6 +80,7 @@ import yuku.ambilwarna.AmbilWarnaDialog;
  */
 public class DetailFragment extends Fragment {
     public static final int DRAWEDITOR_ACTIVITY_RESULT_CODE = 1;
+    public static final int ATTACHMENT_ACTIVITY_RESULT_CODE = 2;
 
     private final static String HTMLSTART = "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">" +
             "<html><head><meta name=\"kolabnotes-richtext\" content=\"1\" /><meta http-equiv=\"Content-Type\" /></head><body>";
@@ -121,6 +124,8 @@ public class DetailFragment extends Fragment {
     private AppCompatActivity activity;
 
     private boolean isDescriptionDirty = false;
+
+    private String uuidForCreation;
 
     //This map contains inline images in its base form, sadly the android webview destroys the correct form
     private Map<String,String> base64Images = new HashMap<>();
@@ -300,6 +305,13 @@ public class DetailFragment extends Fragment {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
             activity.findViewById(R.id.action_insert_image).setVisibility(View.GONE);
         }
+    }
+
+    private String getUUIDForCreation(){
+        if(uuidForCreation == null){
+            uuidForCreation = UUID.randomUUID().toString();
+        }
+        return  uuidForCreation;
     }
 
     void setToolbarColor(){
@@ -694,8 +706,11 @@ public class DetailFragment extends Fragment {
 
                     String alt = path;
 
-                    /* Set focus, as after rotate focus is lost and it's impossible to insert an image */
-                    editor.focusEditor();
+                    //issue 125
+                    if(!editor.isFocused()){
+                        /* Set focus, as after rotate focus is lost and it's impossible to insert an image */
+                        editor.focusEditor();
+                    }
                     editor.insertImage(imageEncoded, alt);
                     putImage(alt,imageEncoded);
 
@@ -726,6 +741,10 @@ public class DetailFragment extends Fragment {
                         ((OnFragmentCallback) activity).fileSelected();
                     }
                 }
+            }
+        }else if(requestCode == ATTACHMENT_ACTIVITY_RESULT_CODE){
+            if (activity instanceof OnFragmentCallback) {
+                ((OnFragmentCallback) activity).fileSelected();
             }
         }
     }
@@ -803,6 +822,7 @@ public class DetailFragment extends Fragment {
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
             menu.findItem(R.id.print).setVisible(false);
+            menu.findItem(R.id.attachments).setVisible(false);
         }
     }
 
@@ -835,6 +855,9 @@ public class DetailFragment extends Fragment {
                 break;
             case R.id.print:
                 printNote();
+                break;
+            case R.id.attachments:
+                showAttachments();
                 break;
         }
         return true;
@@ -1088,6 +1111,7 @@ public class DetailFragment extends Fragment {
         }
     }
 
+
     void saveNote(){
         EditText summary = (EditText) activity.findViewById(R.id.detail_summary);
 
@@ -1115,7 +1139,7 @@ public class DetailFragment extends Fragment {
             }
 
             if (note == null) {
-                final String uuid = UUID.randomUUID().toString();
+                final String uuid = getUUIDForCreation();
                 Identification ident = new Identification(uuid, "kolabnotes-android");
                 Timestamp now = new Timestamp(System.currentTimeMillis());
                 AuditInformation audit = new AuditInformation(now, now);
@@ -1191,6 +1215,11 @@ public class DetailFragment extends Fragment {
      * @param html
      */
     String repairImages(String html){
+        //issue 127
+        if(!Utils.getUseRicheditor(activity)){
+            return html;
+        }
+
         if(html == null || html.trim().length() == 0){
             return null;
         }
@@ -1263,7 +1292,10 @@ public class DetailFragment extends Fragment {
             builder.setPositiveButton(R.string.yes,new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface dialog, int which) {
-                    DetailFragment.this.noteRepository.delete(  activeAccountRepository.getActiveAccount().getAccount(), activeAccountRepository.getActiveAccount().getRootFolder(),note);
+                    ActiveAccount activeAccount = activeAccountRepository.getActiveAccount();
+                    DetailFragment.this.noteRepository.delete( activeAccount.getAccount(), activeAccount.getRootFolder(),note);
+
+                    new AttachmentRepository(activity).deleteForNote(activeAccount.getAccount(), activeAccount.getRootFolder(), note.getIdentification().getUid());
 
                     Utils.updateWidgetsForChange(activity.getApplication());
 
@@ -1359,6 +1391,10 @@ public class DetailFragment extends Fragment {
             builder.setPositiveButton(R.string.yes, new DialogInterface.OnClickListener() {
                 @Override
                 public void onClick(DialogInterface dialog, int which) {
+                    if(isNewNote){
+                        final ActiveAccount activeAccount = activeAccountRepository.getActiveAccount();
+                        new AttachmentRepository(activity).deleteForNote(activeAccount.getAccount(), activeAccount.getRootFolder(), getUUIDForCreation());
+                    }
                     goBack();
                 }
             });
@@ -1380,7 +1416,7 @@ public class DetailFragment extends Fragment {
         Spinner spinner = (Spinner) activity.findViewById(R.id.spinner_notebook);
 
         boolean differences = false;
-        if(summary != null && spinner != null){
+        if(summary != null && spinner != null && note != null){
 
             Note newNote = new Note(note.getIdentification(), note.getAuditInformation(),
                     selectedClassification == null ? Note.Classification.PUBLIC : selectedClassification,
@@ -1411,6 +1447,18 @@ public class DetailFragment extends Fragment {
             String jobName = getString(R.string.app_name) + " Document";
             PrintDocumentAdapter printAdapter = editor.createPrintDocumentAdapter();
             PrintJob printJob = printManager.print(jobName, printAdapter, new PrintAttributes.Builder().build());
+        }
+    }
+
+    private void showAttachments() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            Intent intent = new Intent(activity,AttachmentActivity.class);
+            if(isNewNote){
+                intent.putExtra(Utils.NOTE_UID, getUUIDForCreation());
+            }else {
+                intent.putExtra(Utils.NOTE_UID, note.getIdentification().getUid());
+            }
+            startActivityForResult(intent, ATTACHMENT_ACTIVITY_RESULT_CODE);
         }
     }
 

@@ -204,5 +204,18 @@
     <string name="draweditor_menu_ok">OK</string>
     <string name="draweditor_title_line_weight">Brush size</string>
     <string name="draweditor_saving_toast">Saving</string>
+    <string name="attachment_add">Add attachment</string>
+    <string name="attachment_none">No attachments</string>
+    <string name="attachment_title">Attachments</string>
+    <string name="attachments">Attachments</string>
+    <string name="attachment_creation_failed">Attachment creation failed</string>
+    <string name="attachment_already_exist">Attachment with given filename already exists</string>
+    <string name="attachment_send_to">Share attachement with...</string>
+
+<!-- TODO: Remove or change this placeholder text -->
+    <string name="hello_blank_fragment">Hello blank fragment</string>
+    <string name="no_preview">No preview selected</string>
+    <string name="attachment_not_previewable">Cannot preview attachment</string>
+    <string name="attachment_now_playing">Now playing:</string>
 
 </resources>

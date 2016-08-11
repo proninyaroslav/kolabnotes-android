@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.support.v7.app.NotificationCompat;
 import android.util.Log;
 
+import org.kore.kolab.notes.Attachment;
 import org.kore.kolab.notes.Identification;
 import org.kore.kolab.notes.Note;
 import org.kore.kolab.notes.Notebook;
@@ -42,6 +43,7 @@ public class RepositoryManager {
     private final NoteRepository noteRepository;
     private final NotebookRepository notebookRepository;
     private final ModificationRepository modificationRepository;
+    private final AttachmentRepository attachmentRepository;
     private final Date lastSync;
     private final Context context;
     private final Set<String> localChangedNotes;
@@ -54,6 +56,7 @@ public class RepositoryManager {
         this.noteRepository = new NoteRepository(context);
         this.notebookRepository = new NotebookRepository(context);
         this.modificationRepository = new ModificationRepository(context);
+        this.attachmentRepository = new AttachmentRepository(context);
         this.repo = repo;
         this.lastSync = new Date(lastSync.getTime());
         this.context = context;
@@ -78,6 +81,9 @@ public class RepositoryManager {
 
             for(Note note : book.getNotes()){
                 noteRepository.insert(email,rootFolder,note,book.getIdentification().getUid());
+                for(Attachment attachment : note.getAttachments()){
+                    attachmentRepository.insert(email,rootFolder,note.getIdentification().getUid(),attachment);
+                }
 
                 //inform user for new or updated notes in shared notebooks
                 if(Utils.getShowSyncNotifications(context) && book.isShared() && !localChangedNotes.contains(note.getIdentification().getUid()) && lastSync != null){
@@ -133,6 +139,8 @@ public class RepositoryManager {
         noteRepository.cleanAccount(email,rootFolder);
         noteTagRepository.cleanAccount(email,rootFolder);
         tagRepository.cleanAccount(email,rootFolder);
+        attachmentRepository.cleanAccount(email,rootFolder);
+
     }
 
     private Notebook searchNotebookOfNote(NotesRepository repo, String noteUID){
@@ -157,7 +165,13 @@ public class RepositoryManager {
         for(Note note : localNotes){
             Modification modification = modificationRepository.getUnique(email, rootFolder, note.getIdentification().getUid());
 
-            if(modification != null){
+            final List<Attachment> allForNote = attachmentRepository.getAllForNote(email, rootFolder, note.getIdentification().getUid(), true);
+            note.addAttachments(allForNote.toArray(new Attachment[allForNote.size()]));
+
+            boolean attachmentsCreated = attachmentRepository.attachmentsCreatedAfterLastSync(email, rootFolder, note.getIdentification().getUid(), lastSync);
+            List<Modification> deletedAttachments = modificationRepository.getDeletions(email, rootFolder, Modification.Descriminator.ATTACHMENT, note.getIdentification().getUid());
+
+            if(modification != null || attachmentsCreated || deletedAttachments.size() > 0){
                 Notebook localNotebook = notebookRepository.getByUID(email, rootFolder, noteRepository.getUIDofNotebook(email, rootFolder, note.getIdentification().getUid()));
                 Notebook remoteNotebook = repo.getNotebookBySummary(localNotebook.getSummary());
 
@@ -166,7 +180,7 @@ public class RepositoryManager {
                     remoteNotebook = repo.createNotebook(localNotebook.getIdentification().getUid(), localNotebook.getSummary());
                 }
 
-                if(ModificationRepository.ModificationType.INS.equals(modification.getType())){
+                if(modification != null && ModificationRepository.ModificationType.INS.equals(modification.getType())){
                     Log.d("localIntoRepository","Creating new note:"+note);
                     remoteNotebook.addNote(note);
 
@@ -277,6 +291,12 @@ public class RepositoryManager {
         remoteNote.setClassification(note.getClassification());
         remoteNote.setDescription(note.getDescription());
         remoteNote.setSummary(note.getSummary());
+
+        final Collection<Attachment> remoteAttachments = remoteNote.getAttachments();
+        remoteNote.removeAttachments(remoteAttachments.toArray(new Attachment[remoteAttachments.size()]));
+
+        final Collection<Attachment> localAttachments = note.getAttachments();
+        remoteNote.addAttachments(localAttachments.toArray(new Attachment[localAttachments.size()]));
 
         Set<Tag> remoteCategories = remoteNote.getCategories();
 

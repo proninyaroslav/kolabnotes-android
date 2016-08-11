@@ -60,6 +60,7 @@ import com.mikepenz.materialdrawer.model.SecondaryDrawerItem;
 import com.mikepenz.materialdrawer.model.interfaces.IDrawerItem;
 import com.mikepenz.materialdrawer.model.interfaces.IProfile;
 
+import org.kore.kolab.notes.Attachment;
 import org.kore.kolab.notes.AuditInformation;
 import org.kore.kolab.notes.Colors;
 import org.kore.kolab.notes.Identification;
@@ -76,8 +77,11 @@ import org.kore.kolabnotes.android.R;
 import org.kore.kolabnotes.android.TagListActivity;
 import org.kore.kolabnotes.android.Utils;
 import org.kore.kolabnotes.android.adapter.NoteAdapter;
+import org.kore.kolabnotes.android.content.AccountIdentifier;
 import org.kore.kolabnotes.android.content.ActiveAccount;
 import org.kore.kolabnotes.android.content.ActiveAccountRepository;
+import org.kore.kolabnotes.android.content.AttachmentRepository;
+import org.kore.kolabnotes.android.content.ModificationRepository;
 import org.kore.kolabnotes.android.content.NoteRepository;
 import org.kore.kolabnotes.android.content.NoteSorting;
 import org.kore.kolabnotes.android.content.NoteTagRepository;
@@ -141,6 +145,8 @@ public class OverviewFragment extends Fragment implements /*NoteAdapter.NoteSele
     private TagRepository tagRepository;
     private NoteTagRepository notetagRepository;
     private ActiveAccountRepository activeAccountRepository;
+    private AttachmentRepository attachmentRepository;
+    private ModificationRepository modificationRepository;
     private Toolbar toolbar;
 
     private Drawer mDrawer;
@@ -175,6 +181,8 @@ public class OverviewFragment extends Fragment implements /*NoteAdapter.NoteSele
         tagRepository = new TagRepository(activity);
         notetagRepository = new NoteTagRepository(activity);
         activeAccountRepository = new ActiveAccountRepository(activity);
+        attachmentRepository = new AttachmentRepository(activity);
+        modificationRepository = new ModificationRepository(activity);
     }
 
     @Override
@@ -193,6 +201,16 @@ public class OverviewFragment extends Fragment implements /*NoteAdapter.NoteSele
 
         mAccountManager = AccountManager.get(activity);
         Account[] accounts = mAccountManager.getAccountsByType(AuthenticatorActivity.ARG_ACCOUNT_TYPE);
+
+        Set<AccountIdentifier> allAccounts = activeAccountRepository.getAllAccounts();
+
+        if(allAccounts.size() == 0){
+            allAccounts = activeAccountRepository.initAccounts();
+        }
+
+        //For accounts cleanup
+        Set<AccountIdentifier> accountsForDeletion = new LinkedHashSet<>(allAccounts);
+        accountsForDeletion.remove(new AccountIdentifier("local","Notes"));
 
         ProfileDrawerItem[] profiles = new ProfileDrawerItem[accounts.length+1];
         profiles[0] = new ProfileDrawerItem().withName(getResources().getString(R.string.drawer_account_local)).withTag("Notes").withIcon(getResources().getDrawable(R.drawable.ic_local_account));
@@ -225,7 +243,12 @@ public class OverviewFragment extends Fragment implements /*NoteAdapter.NoteSele
             }
 
             profiles[i+1] = item;
+
+            accountsForDeletion.remove(new AccountIdentifier(email,rootFolder));
         }
+
+        cleanupAccounts(accountsForDeletion);
+
 
         mAccount = new AccountHeaderBuilder()
                 .withActivity(this.activity)
@@ -260,8 +283,9 @@ public class OverviewFragment extends Fragment implements /*NoteAdapter.NoteSele
         mRecyclerView.setLayoutManager(new LinearLayoutManager(activity));
         //mRecyclerView.setItemAnimator(new CustomItemAnimator());
         //mRecyclerView.setItemAnimator(new ReboundItemAnimator());
+        final ActiveAccount activeAccount = activeAccountRepository.getActiveAccount();
 
-        mAdapter = new NoteAdapter(new ArrayList<Note>(), R.layout.row_note_overview, activity, this);
+        mAdapter = new NoteAdapter(new ArrayList<Note>(), R.layout.row_note_overview, activity, this, attachmentRepository.getNoteIDsWithAttachments(activeAccount.getAccount(),activeAccount.getRootFolder()));
         mRecyclerView.setAdapter(mAdapter);
 
         mSwipeRefreshLayout = (SwipeRefreshLayout) getActivity().findViewById(R.id.swipe_container);
@@ -322,6 +346,37 @@ public class OverviewFragment extends Fragment implements /*NoteAdapter.NoteSele
         mRecyclerView.setVisibility(View.GONE);
 
         setListState();
+    }
+
+    private void cleanupAccounts(Set<AccountIdentifier> accountsForDeletion){
+        Thread cleanupThread = new Thread(new AccountsCleaner(accountsForDeletion));
+        cleanupThread.start();
+    }
+
+    final class AccountsCleaner implements Runnable{
+
+        private final Set<AccountIdentifier> accountsForDeletion;
+
+        public  AccountsCleaner(Set<AccountIdentifier> accountsForDeletion){
+            this.accountsForDeletion = accountsForDeletion;
+        }
+
+        @Override
+        public void run() {
+            for(AccountIdentifier identifier : accountsForDeletion){
+                String email = identifier.getAccount();
+                String rootFolder = identifier.getRootFolder();
+                activeAccountRepository.deleteAccount(identifier.getAccount(),identifier.getRootFolder());
+
+                notesRepository.cleanAccount(email, rootFolder);
+                notetagRepository.cleanAccount(email,rootFolder);
+                tagRepository.cleanAccount(email,rootFolder);
+                attachmentRepository.cleanAccount(email, rootFolder);
+                modificationRepository.cleanAccount(email,rootFolder);
+
+                Log.d("AccountsCleaner","Cleaned account:"+identifier);
+            }
+        }
     }
 
     @Override
@@ -803,6 +858,10 @@ public class OverviewFragment extends Fragment implements /*NoteAdapter.NoteSele
 
     public void preventBlankDisplaying(){
         this.preventBlankDisplaying = true;
+
+        if(mAdapter != null && mRecyclerView != null){
+            mAdapter.restoreElevation(mRecyclerView);
+        }
     }
 
     @Override
@@ -1342,7 +1401,7 @@ public class OverviewFragment extends Fragment implements /*NoteAdapter.NoteSele
             try {
                 Log.d("export", Arrays.toString(params));
                 Notebook notebook = notebookRepository.getBySummary(params[0], params[1], params[2]);
-                List<Note> fromNotebook = notesRepository.getFromNotebook(params[0], params[1], notebook.getIdentification().getUid(), new NoteSorting());
+                List<Note> fromNotebook = notesRepository.getFromNotebookWithDescriptionLoaded(params[0], params[1], notebook.getIdentification().getUid(), new NoteSorting());
 
                 for(Note note : fromNotebook){
                     notebook.addNote(note);
@@ -1620,8 +1679,14 @@ public class OverviewFragment extends Fragment implements /*NoteAdapter.NoteSele
         orderDrawerItems(tags, mDrawer);
 
         if(mAdapter == null){
-            mAdapter = new NoteAdapter(new ArrayList<Note>(), R.layout.row_note_overview, activity, this);
+            final ActiveAccount activeAccount = activeAccountRepository.getActiveAccount();
+            mAdapter = new NoteAdapter(new ArrayList<Note>(), R.layout.row_note_overview, activity, this, attachmentRepository.getNoteIDsWithAttachments(activeAccount.getAccount(),activeAccount.getRootFolder()));
+        }else{
+            final ActiveAccount activeAccount = activeAccountRepository.getActiveAccount();
+            mAdapter.setNotesWithAttachment(attachmentRepository.getNoteIDsWithAttachments(activeAccount.getAccount(),activeAccount.getRootFolder()));
         }
+
+
 
         mAdapter.clearNotes();
         if(notes.size() == 0){
